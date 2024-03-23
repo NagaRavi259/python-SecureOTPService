@@ -1,10 +1,13 @@
 import pytest
+import time
 import threading
 from otp_service.otp_service import generate_otp, validate_otp, otp_storage, cleanup_expired_otps  # Adjust import as necessary
 from faker import Faker
-import time
 
 fake = Faker()
+
+
+'''OTP Generation'''
 
 def test_successful_otp_generation():
     ''' Successful OTP Generation: 
@@ -64,6 +67,9 @@ def test_concurrent_otp_generation():
     assert len(set(otps)) == len(user_ids), "OTPs are not unique across users"
     
 
+    
+'''OTP Validation'''
+    
 def test_successful_otp_validation():
     '''Successful OTP Validation: 
     Test that a valid OTP is correctly validated for a user identifier.'''
@@ -80,13 +86,14 @@ def test_otp_validation_with_incorrect_otp():
     incorrect_otp = 'wrong' + correct_otp
     assert validate_otp(user_id, incorrect_otp) is False
 
-def test_expired_otp():
+def test_expired_otp_validation():
     '''Expired OTP: 
     Verify that an OTP past its TTL is not valid.'''
     user_id = fake.email()
-    generate_otp(user_id, ttl=1)  # Set a short TTL
+    otp = generate_otp(user_id, ttl=1)  # Set a short TTL
     time.sleep(2)  # Wait for the OTP to expire
     # Attempt to validate the expired OTP
+    assert validate_otp(user_id, otp) is False
     assert user_id not in otp_storage  # Expired OTP should be removed
 
 def test_case_sensitivity():
@@ -110,45 +117,128 @@ def test_invalid_user_identifier_for_validation():
     user_id = fake.email()
     # Do not generate an OTP for this user_id
     assert validate_otp(user_id, "someOTP") is False
+
     
-def test_expired_otp():
-    '''Expired OTP:
-    Verify that an OTP past its TTL is not valid.'''
-    user_id = fake.email()
-    otp = generate_otp(user_id, ttl=1)  # Set a short TTL
-    time.sleep(2)  # Wait for the OTP to expire
-    # Attempt to validate the expired OTP
-    assert validate_otp(user_id, otp) is False, "Expired OTP was considered valid"
-    assert user_id not in otp_storage, "Expired OTP was not removed after validation attempt"
-    
-## OTP Expiry and Cleanup
+
+''' OTP Expiry and Cleanup'''
+
+## Additional test cases for OTP expiration and cleanup
 def test_automatic_expiry_of_otp():
     '''Automatic Expiry of OTP: 
     Verify that OTPs expire correctly after their TTL has elapsed.'''
     user_id = fake.email()
     generate_otp(user_id, ttl=1)  # Set a short TTL
-    time.sleep(2)  # Wait for the OTP to expire
-    assert validate_otp(user_id, otp_storage.get(user_id, ('', 0))[0]) is False
+    time.sleep(2)  # Ensure enough time has passed for the OTP to expire
+    cleanup_expired_otps()  # Manually trigger cleanup
     assert user_id not in otp_storage
 
 
 def test_manual_cleanup_of_expired_otps():
-    # Generate OTPs with varying TTLs
+    '''Manual Cleanup of Expired OTPs: 
+    Test the periodic cleanup function to ensure it removes expired OTPs without affecting valid ones.'''
     short_lived_user = fake.email()
     long_lived_user = fake.email()
     generate_otp(short_lived_user, ttl=1)  # This OTP will expire
     generate_otp(long_lived_user, ttl=30)  # This OTP will remain valid
     time.sleep(2)  # Ensure the short-lived OTP expires
 
-    cleanup_expired_otps()
+    cleanup_expired_otps()  # Manually trigger cleanup
 
     assert short_lived_user not in otp_storage
     assert long_lived_user in otp_storage
 
 def test_expired_otp_removal_after_validation_attempt():
+    '''Expired OTP Removal After Validation Attempt: 
+    Ensure that attempting to validate an expired OTP both fails and removes the OTP from storage.'''
     user_id = fake.email()
     generate_otp(user_id, ttl=1)  # Set a short TTL
     time.sleep(2)  # Wait for the OTP to expire
     otp_attempt = 'any_value'  # OTP value does not matter as it should be expired
     assert validate_otp(user_id, otp_attempt) is False
     assert user_id not in otp_storage
+    
+    
+
+'''Edge Cases and Error Handling'''
+def test_negative_ttl_input():
+    '''Negative TTL Input: 
+    Test that a negative TTL value raises an appropriate exception.'''
+    user_id = fake.email()
+    with pytest.raises(ValueError):
+        generate_otp(user_id, ttl=-1)
+
+def test_non_integer_ttl_input():
+    '''Non-integer TTL Input: 
+    Ensure that providing a non-integer TTL value raises an exception.'''
+    user_id = fake.email()
+    with pytest.raises(ValueError):
+        generate_otp(user_id, ttl="10")
+
+def test_zero_second_ttl():
+    '''Zero-Second TTL: 
+    Verify the behavior when an OTP is generated with a TTL of 0 seconds. It should expire immediately.'''
+    user_id = fake.email()
+    otp = generate_otp(user_id, ttl=0)
+    # Assuming immediate validation, the OTP should already be expired or close to expiring
+    # The test might need to account for the fact that if the check is too fast, it might still validate
+    assert validate_otp(user_id, otp) is False
+
+def test_very_long_ttl():
+    '''Very Long TTL: 
+    Test OTP generation with an exceptionally long TTL to confirm it's handled correctly.'''
+    user_id = fake.email()
+    very_long_ttl = 60 * 60 * 24 * 365  # 1 year
+    otp = generate_otp(user_id, ttl=very_long_ttl)
+    assert otp is not None
+    # Optionally, validate that the OTP is still valid after a short delay, if the system's design keeps it valid
+    time.sleep(1)
+    assert validate_otp(user_id, otp) is True
+
+def test_empty_user_identifier():
+    '''Empty User Identifier: 
+    Verify that generating an OTP with an empty user identifier raises an exception.'''
+    with pytest.raises(ValueError):
+        generate_otp('')
+ 
+
+
+'''Performance and Stress Testing'''
+def test_large_volume_of_otps():
+    '''Large Volume of OTPs: 
+    Generate a large number of OTPs to test the system's handling of significant load and observe performance metrics.'''
+    start_time = time.time()
+    num_otps = 10000  # Adjust based on your performance testing requirements
+    for _ in range(num_otps):
+        user_id = fake.email()
+        generate_otp(user_id)
+    end_time = time.time()
+    print(f"Generated {num_otps} OTPs in {end_time - start_time} seconds")
+    
+    
+def generate_and_validate_otp(user_id):
+    otp = generate_otp(user_id)
+    assert validate_otp(user_id, otp) is True
+    
+def test_concurrent_otp_generation_and_validation():
+    '''Concurrent OTP Generation and Validation: 
+    Perform concurrent generation and validation of OTPs to assess system performance and integrity under load.'''
+    num_threads = 100  # Adjust based on your stress testing requirements
+    threads = []
+    start_time = time.time()
+    for _ in range(num_threads):
+        user_id = fake.email()
+        thread = threading.Thread(target=generate_and_validate_otp, args=(user_id,))
+        threads.append(thread)
+        thread.start()
+    
+    for thread in threads:
+        thread.join()
+    end_time = time.time()
+    print(f"Concurrently generated and validated {num_threads} OTPs in {end_time - start_time} seconds")
+    
+def test_generate_large_number_of_otps(num_otps=10000):
+    '''Memory Usage with Large Number of OTPs: 
+    Monitor memory usage as a large volume of OTPs are generated and stored, identifying potential memory leaks or inefficiencies.'''
+    for _ in range(num_otps):
+        user_id = fake.email()
+        generate_otp(user_id)

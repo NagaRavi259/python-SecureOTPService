@@ -38,7 +38,7 @@ pip install -r requirements.txt
 To start the OTP service:
 
 ```bash
-python src/otp_service.py
+python otp_service.py
 ```
 
 This will initiate the service and start the cleanup process if not in test mode.
